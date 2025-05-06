@@ -1,43 +1,47 @@
+//command to display my dm's in terminal
+//INSTAGRAM_DATA_PATH=/Users/bilgeebatsaikhan/Downloads/instagram-bilee/your_instagram_activity/messages/inbox npm run test-parser
+
+
 // scripts/test-parser.ts
 const fs = require('fs');
 const path = require('path');
 
-// Set this to your Instagram data directory
-const INSTAGRAM_DATA_PATH = process.env.INSTAGRAM_DATA_PATH || path.join(process.cwd(), 'data/instagram');
+// Point directly to the inbox folder which contains all the conversations
+const INSTAGRAM_DATA_PATH = process.env.INSTAGRAM_DATA_PATH || '/Users/bilgeebatsaikhan/Downloads/instagram-bilee/your_instagram_activity/messages/inbox';
 
-// This function recursively finds all JSON files in the directory and its subdirectories
 async function findConversationFiles(directoryPath: any) {
-  const result: any[] = [];
+  const result = [];
   
-  // Helper function to recursively scan directories
-  async function scanDirectory(dirPath: any) {
-    try {
-      const entries = await fs.promises.readdir(dirPath, { withFileTypes: true });
-      
-      for (const entry of entries) {
-        const fullPath = path.join(dirPath, entry.name);
+  try {
+    // Get all subdirectories in the inbox folder (each representing a conversation)
+    const entries = await fs.promises.readdir(directoryPath, { withFileTypes: true });
+    
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        const conversationDir = path.join(directoryPath, entry.name);
         
-        if (entry.isDirectory()) {
-          // Recursively scan subdirectories
-          await scanDirectory(fullPath);
-        } else if (entry.isFile() && 
-                  entry.name.endsWith('.json') && 
-                  (entry.name.includes('messages') || entry.name.includes('conversation'))) {
-          // Add matching JSON files to the result
-          result.push(fullPath);
+        // Look for JSON files in this conversation directory
+        try {
+          const files = await fs.promises.readdir(conversationDir, { withFileTypes: true });
+          
+          for (const file of files) {
+            if (file.isFile() && file.name.endsWith('.json') && file.name.startsWith('message_')) {
+              result.push(path.join(conversationDir, file.name));
+            }
+          }
+        } catch (error) {
+          console.error(`Error reading conversation directory ${conversationDir}:`, error);
         }
       }
-    } catch (error) {
-      console.error(`Error reading directory ${dirPath}:`, error);
     }
+  } catch (error) {
+    console.error(`Error reading inbox directory ${directoryPath}:`, error);
   }
   
-  // Start the recursive scan
-  await scanDirectory(directoryPath);
   return result;
 }
 
-async function readInstagramJson(filePath: any) {
+async function readInstagramJson(filePath:any) {
   try {
     const rawData = await fs.promises.readFile(filePath, 'utf8');
     return JSON.parse(rawData);
@@ -47,55 +51,73 @@ async function readInstagramJson(filePath: any) {
   }
 }
 
-async function processAllConversations(directoryPath: any) {
+// Function to format date from timestamp
+function formatDate(timestamp:any) {
+  return new Date(timestamp).toLocaleString();
+}
+
+// Helper function to get a summary of a conversation
+function getConversationSummary(conversation: { participants: any[]; messages: string | any[]; title: any; }, filePath: string) {
+  // Extract the conversation folder name from the path
+  const parts = filePath.split(path.sep);
+  const folderName = parts[parts.length - 2]; // Get the parent folder name
+  
+  let participantsStr = 'Unknown';
+  if (conversation.participants && Array.isArray(conversation.participants)) {
+    participantsStr = conversation.participants.map(p => p.name).join(', ');
+  }
+  
+  let messageCount = 0;
+  let firstMessageDate = 'Unknown';
+  let lastMessageDate = 'Unknown';
+  
+  if (conversation.messages && Array.isArray(conversation.messages)) {
+    messageCount = conversation.messages.length;
+    
+    if (messageCount > 0) {
+      // In Instagram exports, messages are typically in reverse chronological order
+      // (newest first), so first message is at the end of the array
+      lastMessageDate = formatDate(conversation.messages[0].timestamp_ms);
+      firstMessageDate = formatDate(conversation.messages[messageCount - 1].timestamp_ms);
+    }
+  }
+  
+  return {
+    folderName,
+    title: conversation.title || folderName,
+    participants: participantsStr,
+    messageCount,
+    firstMessageDate,
+    lastMessageDate
+  };
+}
+
+async function processAllConversations(directoryPath: string) {
   const filePaths = await findConversationFiles(directoryPath);
-  console.log(`Found ${filePaths.length} JSON files`);
+  console.log(`Found ${filePaths.length} conversation JSON files:`);
+  
+  // Print all found JSON files
+  filePaths.forEach(file => {
+    console.log(`- ${file}`);
+  });
   
   const conversations = [];
   
   for (const filePath of filePaths) {
-    const conversation = await readInstagramJson(filePath);
-    if (conversation) {
-      conversations.push(conversation);
+    const data = await readInstagramJson(filePath);
+    if (data) {
+      conversations.push({
+        data,
+        filePath
+      });
     }
   }
   
   return conversations;
 }
 
-// Function to format date from timestamp
-function formatDate(timestamp: string | number | Date) {
-  return new Date(timestamp).toLocaleString();
-}
-
-// Helper function to get a summary of a conversation
-function getConversationSummary(conversation: { participants: any[]; messages: string | any[]; title: any; thread_path: any; }) {
-  const participantsStr = conversation.participants 
-    ? conversation.participants.map((p: { name: any; }) => p.name).join(', ') 
-    : 'Unknown';
-  
-  const messageCount = conversation.messages ? conversation.messages.length : 0;
-  
-  const firstMessageDate = (conversation.messages && conversation.messages.length > 0) 
-    ? formatDate(conversation.messages[conversation.messages.length - 1].timestamp_ms)
-    : 'Unknown';
-    
-  const lastMessageDate = (conversation.messages && conversation.messages.length > 0) 
-    ? formatDate(conversation.messages[0].timestamp_ms) 
-    : 'Unknown';
-  
-  return {
-    title: conversation.title || 'Untitled Conversation',
-    participants: participantsStr,
-    messageCount,
-    firstMessageDate,
-    lastMessageDate,
-    threadPath: conversation.thread_path || 'Unknown',
-  };
-}
-
 async function main() {
-  console.log(`Reading Instagram data from: ${INSTAGRAM_DATA_PATH}`);
+  console.log(`Reading Instagram conversations from: ${INSTAGRAM_DATA_PATH}`);
   
   // Check if directory exists
   if (!fs.existsSync(INSTAGRAM_DATA_PATH)) {
@@ -103,53 +125,38 @@ async function main() {
     process.exit(1);
   }
   
-  // First, just test finding the files
-  console.log("Scanning for JSON files...");
-  const files = await findConversationFiles(INSTAGRAM_DATA_PATH);
-  console.log(`Found ${files.length} JSON files:`);
-  
-  // Print the first 5 files paths (or less if fewer files)
-  files.slice(0, 5).forEach(file => {
-    console.log(`- ${file}`);
-  });
-  
-  if (files.length > 5) {
-    console.log(`... and ${files.length - 5} more`);
-  }
-  
-  // Now process the conversations
-  console.log("\nProcessing conversations...");
+  // Process all conversations
   const conversations = await processAllConversations(INSTAGRAM_DATA_PATH);
   console.log(`Successfully processed ${conversations.length} conversations`);
   
   if (conversations.length > 0) {
     // Print summaries of all conversations
     console.log('\nConversation Summaries:');
-    conversations.forEach((conversation, index) => {
-      const summary = getConversationSummary(conversation);
+    conversations.forEach((conv, index) => {
+      const summary = getConversationSummary(conv.data, conv.filePath);
       console.log(`\n--- Conversation ${index + 1} ---`);
+      console.log(`Folder: ${summary.folderName}`);
       console.log(`Title: ${summary.title}`);
       console.log(`Participants: ${summary.participants}`);
       console.log(`Messages: ${summary.messageCount}`);
       console.log(`First Message: ${summary.firstMessageDate}`);
       console.log(`Last Message: ${summary.lastMessageDate}`);
       
-      if (conversation.messages && conversation.messages.length > 0) {
-        // Print first message sample
-        const firstMessage = conversation.messages[conversation.messages.length - 1];
-        console.log('\nFirst Message Sample:');
-        console.log(`From: ${firstMessage.sender_name}`);
-        console.log(`Time: ${new Date(firstMessage.timestamp_ms).toLocaleString()}`);
-        console.log(`Content: ${firstMessage.content || '(No text content)'}`);
+      // For the first conversation, show a sample message
+      if (index === 0 && conv.data.messages && conv.data.messages.length > 0) {
+        console.log('\nSample Message:');
+        const sampleMsg = conv.data.messages[0];
+        console.log(`From: ${sampleMsg.sender_name}`);
+        console.log(`Time: ${formatDate(sampleMsg.timestamp_ms)}`);
+        console.log(`Content: ${sampleMsg.content || '(No text content)'}`);
         
-        // Check if message has photos
-        if (firstMessage.photos && firstMessage.photos.length > 0) {
-          console.log(`Has Photos: ${firstMessage.photos.length}`);
+        // Check if message has photos or other media
+        if (sampleMsg.photos && sampleMsg.photos.length > 0) {
+          console.log(`Has Photos: ${sampleMsg.photos.length}`);
         }
         
-        // Check if message has videos
-        if (firstMessage.videos && firstMessage.videos.length > 0) {
-          console.log(`Has Videos: ${firstMessage.videos.length}`);
+        if (sampleMsg.videos && sampleMsg.videos.length > 0) {
+          console.log(`Has Videos: ${sampleMsg.videos.length}`);
         }
       }
     });
@@ -158,7 +165,7 @@ async function main() {
     const summaryPath = path.join(process.cwd(), 'conversation-summary.json');
     const summaries = conversations.map((conv, index) => ({
       index,
-      ...getConversationSummary(conv)
+      ...getConversationSummary(conv.data, conv.filePath)
     }));
     
     fs.writeFileSync(summaryPath, JSON.stringify(summaries, null, 2));
